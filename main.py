@@ -111,6 +111,36 @@ def mark_deposit_paid(deposit_id: int):
         }
 
 
+@app.post("/deposits/mark-sender-paid/{sender_id}")
+def mark_sender_paid(sender_id: str):
+    with Session(engine) as session:
+        statement = select(Deposit).where(
+            Deposit.sender_id == sender_id,
+            Deposit.paid == False
+        )
+
+        deposits = session.exec(statement).all()
+
+        if not deposits:
+            return {
+                "status": "no_unpaid_deposits",
+                "sender_id": sender_id,
+                "updated_count": 0
+            }
+
+        for deposit in deposits:
+            deposit.paid = True
+            deposit.paid_at = datetime.utcnow()
+            session.add(deposit)
+
+        session.commit()
+
+        return {
+            "status": "paid",
+            "sender_id": sender_id,
+            "updated_count": len(deposits)
+        }
+
 @app.delete("/deposits/{deposit_id}")
 def delete_deposit(deposit_id: int):
     with Session(engine) as session:
