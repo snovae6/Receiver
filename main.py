@@ -47,6 +47,19 @@ class DepositCreate(SQLModel):
     owed_total: int
     torn_timestamp: int
 
+class PaymentCreate(SQLModel):
+    sender_id: str
+    amount: int
+    note: Optional[str] = None
+
+class Payment(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    sender_id: str = Field(index=True)
+    amount: int
+
+    note: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 @app.on_event("startup")
 def on_startup():
@@ -156,3 +169,33 @@ def delete_deposit(deposit_id: int):
             "status": "deleted",
             "deposit_id": deposit_id
         }
+    
+@app.post("/payments")
+def create_payment(payment: PaymentCreate):
+    if payment.amount <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
+
+    with Session(engine) as session:
+        new_payment = Payment.model_validate(payment)
+        session.add(new_payment)
+        session.commit()
+        session.refresh(new_payment)
+
+        return {
+            "status": "created",
+            "payment_id": new_payment.id,
+            "sender_id": new_payment.sender_id,
+            "amount": new_payment.amount
+        }
+
+
+@app.get("/payments", response_model=List[Payment])
+def get_payments(sender_id: Optional[str] = None):
+    with Session(engine) as session:
+        statement = select(Payment)
+
+        if sender_id is not None:
+            statement = statement.where(Payment.sender_id == sender_id)
+
+        payments = session.exec(statement).all()
+        return payments
