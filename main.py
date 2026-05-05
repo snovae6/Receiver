@@ -61,6 +61,23 @@ class Payment(SQLModel, table=True):
     note: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+class PaymentRequest(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    sender_id: str = Field(index=True)
+    amount: int
+    note: Optional[str] = None
+
+    status: str = Field(default="pending", index=True)  # pending, approved, declined
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    resolved_at: Optional[datetime] = None
+
+class PaymentRequestCreate(SQLModel):
+    sender_id: str
+    amount: int
+    note: Optional[str] = None
+
 @app.on_event("startup")
 def on_startup():
     SQLModel.metadata.create_all(engine)
@@ -199,3 +216,100 @@ def get_payments(sender_id: Optional[str] = None):
 
         payments = session.exec(statement).all()
         return payments
+    
+@app.post("/payment-requests")
+def create_payment_request(request: PaymentRequestCreate):
+    if request.amount <= 0:
+        raise HTTPException(status_code=400, detail="Request amount must be greater than 0")
+
+    with Session(engine) as session:
+        new_request = PaymentRequest.model_validate(request)
+        session.add(new_request)
+        session.commit()
+        session.refresh(new_request)
+
+        return {
+            "status": "created",
+            "request_id": new_request.id,
+            "sender_id": new_request.sender_id,
+            "amount": new_request.amount,
+            "request_status": new_request.status
+        }
+
+
+@app.get("/payment-requests", response_model=List[PaymentRequest])
+def get_payment_requests(
+    sender_id: Optional[str] = None,
+    status: Optional[str] = None
+):
+    with Session(engine) as session:
+        statement = select(PaymentRequest)
+
+        if sender_id is not None:
+            statement = statement.where(PaymentRequest.sender_id == sender_id)
+
+        if status is not None:
+            statement = statement.where(PaymentRequest.status == status)
+
+        requests = session.exec(statement).all()
+        return requests
+
+
+@app.patch("/payment-requests/{request_id}/approve")
+def approve_payment_request(request_id: int):
+    with Session(engine) as session:
+        payment_request = session.get(PaymentRequest, request_id)
+
+        if not payment_request:
+            raise HTTPException(status_code=404, detail="Payment request not found")
+
+        if payment_request.status != "pending":
+            raise HTTPException(status_code=400, detail="Payment request is not pending")
+
+        payment_request.status = "approved"
+        payment_request.resolved_at = datetime.utcnow()
+
+        payment = Payment(
+            sender_id=payment_request.sender_id,
+            amount=payment_request.amount,
+            note=f"Approved payment request #{payment_request.id}: {payment_request.note or ''}"
+        )
+
+        session.add(payment_request)
+        session.add(payment)
+        session.commit()
+        session.refresh(payment_request)
+        session.refresh(payment)
+
+        return {
+            "status": "approved",
+            "request_id": payment_request.id,
+            "payment_id": payment.id,
+            "sender_id": payment_request.sender_id,
+            "amount": payment_request.amount
+        }
+
+@app.patch("/payment-requests/{request_id}/decline")
+def decline_payment_request(request_id: int):
+    with Session(engine) as session:
+        payment_request = session.get(PaymentRequest, request_id)
+
+        if not payment_request:
+            raise HTTPException(status_code=404, detail="Payment request not found")
+
+        if payment_request.status != "pending":
+            raise HTTPException(status_code=400, detail="Payment request is not pending")
+
+        payment_request.status = "declined"
+        payment_request.resolved_at = datetime.utcnow()
+
+        session.add(payment_request)
+        session.commit()
+        session.refresh(payment_request)
+
+        return {
+            "status": "declined",
+            "request_id": payment_request.id,
+            "sender_id": payment_request.sender_id,
+            "amount": payment_request.amount
+        }
