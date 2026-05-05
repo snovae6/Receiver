@@ -1,3 +1,5 @@
+import secrets
+import requests
 from datetime import datetime
 from typing import Optional, List
 
@@ -77,6 +79,45 @@ class PaymentRequestCreate(SQLModel):
     sender_id: str
     amount: int
     note: Optional[str] = None
+
+class SenderVerifyRequest(SQLModel):
+    api_key: str
+
+
+class VerifiedPaymentRequestCreate(SQLModel):
+    token: str
+    amount: int
+    note: Optional[str] = None
+
+class SenderSession(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    token: str = Field(index=True, unique=True)
+    sender_id: str = Field(index=True)
+    torn_name: Optional[str] = None
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+def verify_torn_api_key(api_key: str):
+    url = f"https://api.torn.com/v2/user?selections=basic&key={api_key}"
+
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not verify Torn API key")
+
+    if data.get("error"):
+        raise HTTPException(status_code=400, detail=data["error"].get("error", "Invalid Torn API key"))
+
+    # Torn v2/basic commonly returns id/name at top level
+    torn_id = data.get("id") or data.get("player_id")
+    torn_name = data.get("name")
+
+    if not torn_id:
+        raise HTTPException(status_code=400, detail="Could not determine Torn ID from API key")
+
+    return str(torn_id), torn_name
 
 @app.on_event("startup")
 def on_startup():
@@ -322,6 +363,75 @@ def approve_payment_request_post(request_id: int):
 @app.post("/payment-requests/{request_id}/decline")
 def decline_payment_request_post(request_id: int):
     return decline_payment_request(request_id)
+
+@app.post("/sender/verify")
+def verify_sender(request: SenderVerifyRequest):
+    sender_id, torn_name = verify_torn_api_key(request.api_key)
+
+    token = secrets.token_urlsafe(32)
+
+    with Session(engine) as session:
+        sender_session = SenderSession(
+            token=token,
+            sender_id=sender_id,
+            torn_name=torn_name
+        )
+
+        session.add(sender_session)
+        session.commit()
+        session.refresh(sender_session)
+
+        return {
+            "status": "verified",
+            "token": token,
+            "sender_id": sender_id,
+            "torn_name": torn_name
+        }
+
+
+@app.get("/ledger/verified/{token}")
+def get_verified_sender_ledger(token: str):
+    with Session(engine) as session:
+        sender_session = session.exec(
+            select(SenderSession).where(SenderSession.token == token)
+        ).first()
+
+        if not sender_session:
+            raise HTTPException(status_code=401, detail="Invalid sender verification token")
+
+        return get_sender_ledger(sender_session.sender_id)
+
+
+@app.post("/payment-requests/verified")
+def create_verified_payment_request(request: VerifiedPaymentRequestCreate):
+    if request.amount <= 0:
+        raise HTTPException(status_code=400, detail="Request amount must be greater than 0")
+
+    with Session(engine) as session:
+        sender_session = session.exec(
+            select(SenderSession).where(SenderSession.token == request.token)
+        ).first()
+
+        if not sender_session:
+            raise HTTPException(status_code=401, detail="Invalid sender verification token")
+
+        new_request = PaymentRequest(
+            sender_id=sender_session.sender_id,
+            amount=request.amount,
+            note=request.note
+        )
+
+        session.add(new_request)
+        session.commit()
+        session.refresh(new_request)
+
+        return {
+            "status": "created",
+            "request_id": new_request.id,
+            "sender_id": new_request.sender_id,
+            "amount": new_request.amount,
+            "request_status": new_request.status
+        }
 
 @app.get("/ledger/{sender_id}")
 def get_sender_ledger(sender_id: str):
