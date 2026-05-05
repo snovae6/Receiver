@@ -322,3 +322,35 @@ def approve_payment_request_post(request_id: int):
 @app.post("/payment-requests/{request_id}/decline")
 def decline_payment_request_post(request_id: int):
     return decline_payment_request(request_id)
+
+@app.get("/ledger/{sender_id}")
+def get_sender_ledger(sender_id: str):
+    with Session(engine) as session:
+        deposits = session.exec(
+            select(Deposit).where(
+                Deposit.sender_id == sender_id,
+                Deposit.paid == False
+            )
+        ).all()
+
+        payments = session.exec(
+            select(Payment).where(Payment.sender_id == sender_id)
+        ).all()
+
+        requests = session.exec(
+            select(PaymentRequest).where(PaymentRequest.sender_id == sender_id)
+        ).all()
+
+        total_deposits = sum(d.owed_total for d in deposits)
+        total_payments = sum(p.amount for p in payments)
+        balance = max(total_deposits - total_payments, 0)
+
+        return {
+            "sender_id": sender_id,
+            "total_deposits": total_deposits,
+            "total_payments": total_payments,
+            "balance": balance,
+            "deposits": deposits,
+            "payments": payments,
+            "payment_requests": requests
+        }
