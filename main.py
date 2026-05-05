@@ -313,3 +313,12 @@ def decline_payment_request(request_id: int):
             "sender_id": payment_request.sender_id,
             "amount": payment_request.amount
         }
+    
+@app.post("/payment-requests/{request_id}/approve")
+def approve_payment_request_post(request_id: int):
+    return approve_payment_request(request_id)
+
+
+@app.post("/payment-requests/{request_id}/decline")
+def decline_payment_request_post(request_id: int):
+    return decline_payment_request(request_id)
