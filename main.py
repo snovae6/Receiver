@@ -111,8 +111,20 @@ def verify_torn_api_key(api_key: str):
         raise HTTPException(status_code=400, detail=data["error"].get("error", "Invalid Torn API key"))
 
     # Torn v2/basic commonly returns id/name at top level
-    torn_id = data.get("id") or data.get("player_id")
-    torn_name = data.get("name")
+    torn_id = (
+        data.get("id")
+        or data.get("player_id")
+        or data.get("profile", {}).get("id")
+        or data.get("user", {}).get("id")
+    )
+
+    torn_name = (
+        data.get("name")
+        or data.get("profile", {}).get("name")
+        or data.get("user", {}).get("name")
+    )
+
+    print("TORN VERIFY RESPONSE:", data)
 
     if not torn_id:
         raise HTTPException(status_code=400, detail="Could not determine Torn ID from API key")
