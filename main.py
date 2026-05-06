@@ -67,10 +67,12 @@ class PaymentRequest(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 
     sender_id: str = Field(index=True)
+    sender_name: Optional[str] = None
+
     amount: int
     note: Optional[str] = None
 
-    status: str = Field(default="pending", index=True)  # pending, approved, declined
+    status: str = Field(default="pending", index=True)
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
     resolved_at: Optional[datetime] = None
@@ -419,6 +421,11 @@ def create_verified_payment_request(request: VerifiedPaymentRequestCreate):
     if request.amount <= 0:
         raise HTTPException(status_code=400, detail="Request amount must be greater than 0")
 
+    ledger = get_sender_ledger(sender_session.sender_id)
+
+    if request.amount > ledger["balance"]:
+        raise HTTPException(status_code=400, detail="Request exceeds available balance")
+
     with Session(engine) as session:
         sender_session = session.exec(
             select(SenderSession).where(SenderSession.token == request.token)
@@ -429,6 +436,7 @@ def create_verified_payment_request(request: VerifiedPaymentRequestCreate):
 
         new_request = PaymentRequest(
             sender_id=sender_session.sender_id,
+            sender_name=sender_session.torn_name,
             amount=request.amount,
             note=request.note
         )
