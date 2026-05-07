@@ -6,6 +6,7 @@ from typing import Optional, List
 from fastapi import FastAPI, HTTPException
 from sqlmodel import SQLModel, Field, Session, create_engine, select
 import os
+from sqlalchemy import text
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///halo_points_compact_tracker.db")
 
@@ -163,9 +164,17 @@ def build_sender_ledger(session: Session, sender_id: str):
         "payment_requests": requests
     }
 
+def run_migrations():
+    with engine.begin() as conn:
+        conn.execute(text("""
+            ALTER TABLE paymentrequest
+            ADD COLUMN IF NOT EXISTS sender_name VARCHAR
+        """))
+
 @app.on_event("startup")
 def on_startup():
     SQLModel.metadata.create_all(engine)
+    run_migrations()
 
 
 @app.post("/deposits")
