@@ -133,6 +133,36 @@ def verify_torn_api_key(api_key: str):
 
     return str(torn_id), torn_name
 
+def build_sender_ledger(session: Session, sender_id: str):
+    deposits = session.exec(
+        select(Deposit).where(
+            Deposit.sender_id == sender_id,
+            Deposit.paid == False
+        )
+    ).all()
+
+    payments = session.exec(
+        select(Payment).where(Payment.sender_id == sender_id)
+    ).all()
+
+    requests = session.exec(
+        select(PaymentRequest).where(PaymentRequest.sender_id == sender_id)
+    ).all()
+
+    total_deposits = sum(d.owed_total for d in deposits)
+    total_payments = sum(p.amount for p in payments)
+    balance = max(total_deposits - total_payments, 0)
+
+    return {
+        "sender_id": sender_id,
+        "total_deposits": total_deposits,
+        "total_payments": total_payments,
+        "balance": balance,
+        "deposits": deposits,
+        "payments": payments,
+        "payment_requests": requests
+    }
+
 @app.on_event("startup")
 def on_startup():
     SQLModel.metadata.create_all(engine)
@@ -229,7 +259,6 @@ def mark_sender_paid(sender_id: str):
 @app.delete("/deposits/{deposit_id}")
 def delete_deposit(deposit_id: int):
     with Session(engine) as session:
-        deposit = session.get(Deposit, deposit_id)
 
         if not deposit:
             raise HTTPException(status_code=404, detail="Deposit not found")
@@ -413,7 +442,7 @@ def get_verified_sender_ledger(token: str):
         if not sender_session:
             raise HTTPException(status_code=401, detail="Invalid sender verification token")
 
-        return get_sender_ledger(sender_session.sender_id)
+        return build_sender_ledger(session, sender_session.sender_id)
 
 
 @app.post("/payment-requests/verified")
@@ -456,31 +485,4 @@ def create_verified_payment_request(request: VerifiedPaymentRequestCreate):
 @app.get("/ledger/{sender_id}")
 def get_sender_ledger(sender_id: str):
     with Session(engine) as session:
-        deposits = session.exec(
-            select(Deposit).where(
-                Deposit.sender_id == sender_id,
-                Deposit.paid == False
-            )
-        ).all()
-
-        payments = session.exec(
-            select(Payment).where(Payment.sender_id == sender_id)
-        ).all()
-
-        requests = session.exec(
-            select(PaymentRequest).where(PaymentRequest.sender_id == sender_id)
-        ).all()
-
-        total_deposits = sum(d.owed_total for d in deposits)
-        total_payments = sum(p.amount for p in payments)
-        balance = max(total_deposits - total_payments, 0)
-
-        return {
-            "sender_id": sender_id,
-            "total_deposits": total_deposits,
-            "total_payments": total_payments,
-            "balance": balance,
-            "deposits": deposits,
-            "payments": payments,
-            "payment_requests": requests
-        }
+        return build_sender_ledger(session, sender_id)
