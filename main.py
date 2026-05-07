@@ -127,8 +127,6 @@ def verify_torn_api_key(api_key: str):
         or data.get("user", {}).get("name")
     )
 
-    print("TORN VERIFY RESPONSE:", data)
-
     if not torn_id:
         raise HTTPException(status_code=400, detail="Could not determine Torn ID from API key")
 
@@ -268,6 +266,7 @@ def mark_sender_paid(sender_id: str):
 @app.delete("/deposits/{deposit_id}")
 def delete_deposit(deposit_id: int):
     with Session(engine) as session:
+        deposit = session.get(Deposit, deposit_id)
 
         if not deposit:
             raise HTTPException(status_code=404, detail="Deposit not found")
@@ -459,11 +458,6 @@ def create_verified_payment_request(request: VerifiedPaymentRequestCreate):
     if request.amount <= 0:
         raise HTTPException(status_code=400, detail="Request amount must be greater than 0")
 
-    ledger = get_sender_ledger(sender_session.sender_id)
-
-    if request.amount > ledger["balance"]:
-        raise HTTPException(status_code=400, detail="Request exceeds available balance")
-
     with Session(engine) as session:
         sender_session = session.exec(
             select(SenderSession).where(SenderSession.token == request.token)
@@ -471,6 +465,21 @@ def create_verified_payment_request(request: VerifiedPaymentRequestCreate):
 
         if not sender_session:
             raise HTTPException(status_code=401, detail="Invalid sender verification token")
+
+        ledger = build_sender_ledger(session, sender_session.sender_id)
+
+        if request.amount > ledger["balance"]:
+            raise HTTPException(status_code=400, detail="Request exceeds available balance")
+
+        existing = session.exec(
+            select(PaymentRequest).where(
+                PaymentRequest.sender_id == sender_session.sender_id,
+                PaymentRequest.status == "pending"
+            )
+        ).first()
+
+        if existing:
+            raise HTTPException(status_code=400, detail="You already have a pending request")
 
         new_request = PaymentRequest(
             sender_id=sender_session.sender_id,
@@ -487,6 +496,7 @@ def create_verified_payment_request(request: VerifiedPaymentRequestCreate):
             "status": "created",
             "request_id": new_request.id,
             "sender_id": new_request.sender_id,
+            "sender_name": new_request.sender_name,
             "amount": new_request.amount,
             "request_status": new_request.status
         }
