@@ -382,7 +382,7 @@ def decline_payment_request_post(request_id: int):
 def verify_sender(request: SenderVerifyRequest):
     sender_id, torn_name = verify_torn_api_key(request.api_key)
 
-    token = secrets.token_urlsafe(32)
+    token = secrets.token_hex(32)
 
     with Session(engine) as session:
         sender_session = SenderSession(
